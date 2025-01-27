@@ -158,6 +158,7 @@ function getFormattedAIResponse(content) {
                     },
                 ],
             });
+            console.log("AI response (gpt-4o-mini):", response.choices[0].message.parsed);
             return (_b = (_a = response.choices[0].message.parsed) === null || _a === void 0 ? void 0 : _a.reviews) !== null && _b !== void 0 ? _b : [];
         }
         catch (error) {
@@ -179,6 +180,7 @@ function getAIResponse(prompt) {
                     },
                 ],
             });
+            console.log("AI response (o1-preview):", response.choices[0].message.content);
             const formattedResponse = yield getFormattedAIResponse(response.choices[0].message.content);
             return formattedResponse;
         }

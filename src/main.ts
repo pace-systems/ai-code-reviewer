@@ -138,6 +138,10 @@ async function getFormattedAIResponse(content: string | null): Promise<Array<{
         },
       ],
     });
+    console.log(
+      "AI response (gpt-4o-mini):",
+      response.choices[0].message.parsed
+    );
 
     return response.choices[0].message.parsed?.reviews ?? [];
   } catch (error) {
@@ -161,6 +165,10 @@ async function getAIResponse(prompt: string): Promise<Array<{
         },
       ],
     });
+    console.log(
+      "AI response (o1-preview):",
+      response.choices[0].message.content
+    );
 
     const formattedResponse = await getFormattedAIResponse(
       response.choices[0].message.content
