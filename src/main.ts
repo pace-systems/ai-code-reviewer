@@ -181,12 +181,14 @@ const ReviewCommentSchema = z.object({
   reviewComment: z.string(),
 });
 
-const FullReviewSchema = z.array(
-  z.object({
-    chunkIndex: z.number(),
-    reviews: z.array(ReviewCommentSchema),
-  })
-);
+const ReviewDiffSchema = z.object({
+  chunkIndex: z.number(),
+  reviews: z.array(ReviewCommentSchema),
+});
+
+const ReviewSchema = z.object({
+  review: z.array(ReviewDiffSchema),
+});
 
 async function getFormattedAIResponse(rawContent: string | null): Promise<
   Array<{
@@ -199,7 +201,7 @@ async function getFormattedAIResponse(rawContent: string | null): Promise<
   try {
     const response = await openai.beta.chat.completions.parse({
       model: "gpt-4o-mini",
-      response_format: zodResponseFormat(FullReviewSchema, "reviews"),
+      response_format: zodResponseFormat(ReviewSchema, "review"),
       messages: [
         {
           role: "user",
@@ -208,7 +210,7 @@ async function getFormattedAIResponse(rawContent: string | null): Promise<
       ],
     });
 
-    const parsed = response.choices[0].message.parsed || [];
+    const parsed = response.choices[0].message.parsed?.review || [];
     return parsed;
   } catch (error) {
     console.error("Error (gpt-4o-mini):", error);

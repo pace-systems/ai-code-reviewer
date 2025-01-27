@@ -195,18 +195,22 @@ const ReviewCommentSchema = zod_1.z.object({
     lineNumber: zod_1.z.string(),
     reviewComment: zod_1.z.string(),
 });
-const FullReviewSchema = zod_1.z.array(zod_1.z.object({
+const ReviewDiffSchema = zod_1.z.object({
     chunkIndex: zod_1.z.number(),
     reviews: zod_1.z.array(ReviewCommentSchema),
-}));
+});
+const ReviewSchema = zod_1.z.object({
+    review: zod_1.z.array(ReviewDiffSchema),
+});
 function getFormattedAIResponse(rawContent) {
+    var _a;
     return __awaiter(this, void 0, void 0, function* () {
         if (!rawContent)
             return [];
         try {
             const response = yield openai.beta.chat.completions.parse({
                 model: "gpt-4o-mini",
-                response_format: (0, zod_2.zodResponseFormat)(FullReviewSchema, "reviews"),
+                response_format: (0, zod_2.zodResponseFormat)(ReviewSchema, "review"),
                 messages: [
                     {
                         role: "user",
@@ -214,7 +218,7 @@ function getFormattedAIResponse(rawContent) {
                     },
                 ],
             });
-            const parsed = response.choices[0].message.parsed || [];
+            const parsed = ((_a = response.choices[0].message.parsed) === null || _a === void 0 ? void 0 : _a.review) || [];
             return parsed;
         }
         catch (error) {
