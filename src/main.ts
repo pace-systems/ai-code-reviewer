@@ -24,6 +24,7 @@ interface PRDetails {
 }
 
 async function getPRDetails(): Promise<PRDetails> {
+  console.log("getPRDetails", readFileSync(process.env.GITHUB_EVENT_PATH || "", "utf8"));
   const { repository, number } = JSON.parse(
     readFileSync(process.env.GITHUB_EVENT_PATH || "", "utf8")
   );
@@ -185,6 +186,7 @@ async function createReviewComment(
 async function main() {
   const prDetails = await getPRDetails();
   let diff: string | null;
+  console.log("main", readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
   const eventData = JSON.parse(
     readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8")
   );
