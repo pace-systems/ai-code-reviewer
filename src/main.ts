@@ -130,7 +130,7 @@ async function getAIResponse(prompt: string): Promise<Array<{
       response_format: { type: "json_object" as const },
       messages: [
         {
-          role: "system",
+          role: "user",
           content: prompt,
         },
       ],
