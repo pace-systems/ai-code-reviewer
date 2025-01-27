@@ -52,7 +52,6 @@ const zod_1 = __nccwpck_require__(3301);
 const zod_2 = __nccwpck_require__(1612);
 const GITHUB_TOKEN = core.getInput("GITHUB_TOKEN");
 const OPENAI_API_KEY = core.getInput("OPENAI_API_KEY");
-const OPENAI_API_MODEL = core.getInput("OPENAI_API_MODEL");
 const octokit = new rest_1.Octokit({ auth: GITHUB_TOKEN });
 const openai = new openai_1.default({
     apiKey: OPENAI_API_KEY,
@@ -144,24 +143,44 @@ ${chunk.changes
 \`\`\`
 `;
 }
-function getAIResponse(prompt) {
+function getFormattedAIResponse(content) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
-        const queryConfig = {
-            model: OPENAI_API_MODEL,
-            max_completion_tokens: 700,
-            top_p: 1,
-            frequency_penalty: 0,
-            presence_penalty: 0,
-        };
         try {
-            const response = yield openai.beta.chat.completions.parse(Object.assign(Object.assign({}, queryConfig), { response_format: (0, zod_2.zodResponseFormat)(ReviewSchema, "reviews"), messages: [
+            const response = yield openai.beta.chat.completions.parse({
+                model: "gpt-4o-mini",
+                max_completion_tokens: 700,
+                response_format: (0, zod_2.zodResponseFormat)(ReviewSchema, "reviews"),
+                messages: [
+                    {
+                        role: "user",
+                        content: `Given the following data, format it with the given response format: ${content}`,
+                    },
+                ],
+            });
+            return (_b = (_a = response.choices[0].message.parsed) === null || _a === void 0 ? void 0 : _a.reviews) !== null && _b !== void 0 ? _b : [];
+        }
+        catch (error) {
+            console.error("Error:", error);
+            return null;
+        }
+    });
+}
+function getAIResponse(prompt) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const response = yield openai.chat.completions.create({
+                model: "o1-preview",
+                max_completion_tokens: 700,
+                messages: [
                     {
                         role: "user",
                         content: prompt,
                     },
-                ] }));
-            return (_b = (_a = response.choices[0].message.parsed) === null || _a === void 0 ? void 0 : _a.reviews) !== null && _b !== void 0 ? _b : [];
+                ],
+            });
+            const formattedResponse = yield getFormattedAIResponse(response.choices[0].message.content);
+            return formattedResponse;
         }
         catch (error) {
             console.error("Error:", error);

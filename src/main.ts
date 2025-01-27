@@ -10,7 +10,6 @@ import { zodResponseFormat } from "openai/helpers/zod";
 
 const GITHUB_TOKEN: string = core.getInput("GITHUB_TOKEN");
 const OPENAI_API_KEY: string = core.getInput("OPENAI_API_KEY");
-const OPENAI_API_MODEL: string = core.getInput("OPENAI_API_MODEL");
 
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
@@ -123,22 +122,38 @@ ${chunk.changes
 `;
 }
 
+async function getFormattedAIResponse(content: string | null): Promise<Array<{
+  lineNumber: string;
+  reviewComment: string;
+}> | null> {
+  try {
+    const response = await openai.beta.chat.completions.parse({
+      model: "gpt-4o-mini",
+      max_completion_tokens: 700,
+      response_format: zodResponseFormat(ReviewSchema, "reviews"),
+      messages: [
+        {
+          role: "user",
+          content: `Given the following data, format it with the given response format: ${content}`,
+        },
+      ],
+    });
+
+    return response.choices[0].message.parsed?.reviews ?? [];
+  } catch (error) {
+    console.error("Error:", error);
+    return null;
+  }
+}
+
 async function getAIResponse(prompt: string): Promise<Array<{
   lineNumber: string;
   reviewComment: string;
 }> | null> {
-  const queryConfig = {
-    model: OPENAI_API_MODEL,
-    max_completion_tokens: 700,
-    top_p: 1,
-    frequency_penalty: 0,
-    presence_penalty: 0,
-  };
-
   try {
-    const response = await openai.beta.chat.completions.parse({
-      ...queryConfig,
-      response_format: zodResponseFormat(ReviewSchema, "reviews"),
+    const response = await openai.chat.completions.create({
+      model: "o1-preview",
+      max_completion_tokens: 700,
       messages: [
         {
           role: "user",
@@ -147,7 +162,11 @@ async function getAIResponse(prompt: string): Promise<Array<{
       ],
     });
 
-    return response.choices[0].message.parsed?.reviews ?? [];
+    const formattedResponse = await getFormattedAIResponse(
+      response.choices[0].message.content
+    );
+
+    return formattedResponse;
   } catch (error) {
     console.error("Error:", error);
     return null;
