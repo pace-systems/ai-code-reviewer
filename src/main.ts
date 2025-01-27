@@ -5,6 +5,9 @@ import { Octokit } from "@octokit/rest";
 import parseDiff, { Chunk, File } from "parse-diff";
 import minimatch from "minimatch";
 
+import { z } from "zod";
+import { zodResponseFormat } from "openai/helpers/zod";
+
 const GITHUB_TOKEN: string = core.getInput("GITHUB_TOKEN");
 const OPENAI_API_KEY: string = core.getInput("OPENAI_API_KEY");
 const OPENAI_API_MODEL: string = core.getInput("OPENAI_API_MODEL");
@@ -78,6 +81,15 @@ async function analyzeCode(
   return comments;
 }
 
+const ReviewCommentSchema = z.object({
+  lineNumber: z.string(),
+  reviewComment: z.string(),
+});
+
+const ReviewSchema = z.object({
+  reviews: z.array(ReviewCommentSchema),
+});
+
 function createPrompt(file: File, chunk: Chunk, prDetails: PRDetails): string {
   return `You are an expert with Python and Django. Your task is to review pull requests. Instructions:
 - Provide the response in following JSON format:  {"reviews": [{"lineNumber":  <line_number>, "reviewComment": "<review comment>"}]}
@@ -124,9 +136,9 @@ async function getAIResponse(prompt: string): Promise<Array<{
   };
 
   try {
-    const response = await openai.chat.completions.create({
+    const response = await openai.beta.chat.completions.parse({
       ...queryConfig,
-      response_format: { type: "json_object" as const },
+      response_format: zodResponseFormat(ReviewSchema, "reviews"),
       messages: [
         {
           role: "user",
@@ -135,8 +147,7 @@ async function getAIResponse(prompt: string): Promise<Array<{
       ],
     });
 
-    const res = response.choices[0].message?.content?.trim() || "{}";
-    return JSON.parse(res).reviews;
+    return response.choices[0].message.parsed?.reviews ?? [];
   } catch (error) {
     console.error("Error:", error);
     return null;
