@@ -91,42 +91,45 @@ const ReviewSchema = z.object({
 });
 
 function createPrompt(file: File, chunk: Chunk, prDetails: PRDetails): string {
-  return `You are an expert in Python and Django. Your task is to review pull requests by analyzing the provided code diffs. Please follow these instructions carefully:
-- Respond only in the following JSON format: {"reviews": [{"lineNumber": <line_number>, "reviewComment": "<review comment>"}]}
-- Do not include any positive comments or compliments.
-- Provide comments and suggestions ONLY if there are issues or improvements needed. If there are no issues, "reviews" should be an empty array.
-- Write comments in GitHub Markdown format, focusing solely on code quality, correctness, and best practices.
-- Use the provided pull request title and description only for context related to the code changes.
-- DO NOT suggest adding comments to the code.
-- **Return only valid JSON** without any enclosing backticks or additional formatting.
+  return `
+    You are an expert in Python and Django. Your task is to review pull requests by analyzing the provided code diffs. Please follow these instructions carefully:
+    - Respond only in the following JSON format: {"reviews": [{"lineNumber": <line_number>, "reviewComment": "<review comment>"}]}
+    - Do not include any positive comments or compliments.
+    - Provide comments and suggestions ONLY if there are issues or improvements needed. If there are no issues, "reviews" should be an empty array.
+    - Write comments in GitHub Markdown format, focusing solely on code quality, correctness, and best practices.
+    - Use the provided pull request title and description only for context related to the code changes.
+    - DO NOT suggest adding comments to the code.
+    - **Return only valid JSON** without any enclosing backticks or additional formatting.
 
-Review the following code diff in the file "${
-    file.to
-  }" considering the pull request title and description:
+    Review the following code diff in the file "${
+      file.to
+    }" considering the pull request title and description:
 
-Pull request title: ${prDetails.title}
-Pull request description:
+    Pull request title: ${prDetails.title}
+    Pull request description:
 
----
-${prDetails.description}
----
+    ---
+    ${prDetails.description}
+    ---
 
-Git diff to review:
+    Git diff to review:
 
-\`\`\`diff
-${chunk.content}
-${chunk.changes
-  // @ts-expect-error - ln and ln2 exists where needed
-  .map((c) => `${c.ln ? c.ln : c.ln2} ${c.content}`)
-  .join("\n")}
-\`\`\`
-`;
+    \`\`\`diff
+    ${chunk.content}
+    ${chunk.changes
+      // @ts-expect-error - ln and ln2 exists where needed
+      .map((c) => `${c.ln ? c.ln : c.ln2} ${c.content}`)
+      .join("\n")}
+    \`\`\`
+  `;
 }
 
 async function getFormattedAIResponse(content: string | null): Promise<Array<{
   lineNumber: string;
   reviewComment: string;
 }> | null> {
+  if (!content) return null;
+
   try {
     const response = await openai.beta.chat.completions.parse({
       model: "gpt-4o-mini",
