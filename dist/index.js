@@ -94,6 +94,7 @@ function analyzeCode(parsedDiff, prDetails) {
                 continue; // Ignore deleted files
             for (const chunk of file.chunks) {
                 const prompt = createPrompt(file, chunk, prDetails);
+                console.log("Prompt:", prompt);
                 const aiResponse = yield getAIResponse(prompt);
                 if (aiResponse) {
                     const newComments = createComment(file, chunk, aiResponse);
@@ -149,7 +150,6 @@ function getFormattedAIResponse(content) {
         try {
             const response = yield openai.beta.chat.completions.parse({
                 model: "gpt-4o-mini",
-                max_completion_tokens: 700,
                 response_format: (0, zod_2.zodResponseFormat)(ReviewSchema, "reviews"),
                 messages: [
                     {
@@ -172,7 +172,6 @@ function getAIResponse(prompt) {
         try {
             const response = yield openai.chat.completions.create({
                 model: "o1-preview",
-                max_completion_tokens: 700,
                 messages: [
                     {
                         role: "user",

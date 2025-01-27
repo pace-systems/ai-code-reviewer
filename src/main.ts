@@ -68,6 +68,7 @@ async function analyzeCode(
     if (file.to === "/dev/null") continue; // Ignore deleted files
     for (const chunk of file.chunks) {
       const prompt = createPrompt(file, chunk, prDetails);
+      console.log("Prompt:", prompt);
       const aiResponse = await getAIResponse(prompt);
       if (aiResponse) {
         const newComments = createComment(file, chunk, aiResponse);
@@ -129,7 +130,6 @@ async function getFormattedAIResponse(content: string | null): Promise<Array<{
   try {
     const response = await openai.beta.chat.completions.parse({
       model: "gpt-4o-mini",
-      max_completion_tokens: 700,
       response_format: zodResponseFormat(ReviewSchema, "reviews"),
       messages: [
         {
@@ -157,7 +157,6 @@ async function getAIResponse(prompt: string): Promise<Array<{
   try {
     const response = await openai.chat.completions.create({
       model: "o1-preview",
-      max_completion_tokens: 700,
       messages: [
         {
           role: "user",
