@@ -95,13 +95,6 @@ function gatherDiffData(parsedDiff) {
         // ignore deleted files
         if (file.to === "/dev/null")
             continue;
-        /**
-         * Create a diff string for each chunk resembling the following:
-         * @@ -17,5 +17,4 @@ jobs:
-            17    uses: pace-systems/ai-code-reviewer
-            18    with:
-            19        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-         */
         for (const chunk of file.chunks) {
             const chunkDiffText = [
                 chunk.content,
@@ -120,15 +113,6 @@ function gatherDiffData(parsedDiff) {
 }
 // Build one large prompt with all chunk data
 function createPrompt(prDetails, diffChunks) {
-    /**
-     * Ask the model to return an array of objects. Each object has:
-     * {
-     *   chunkIndex: <the chunkIndex from diffChunks[]>,
-     *   reviews: [ { lineNumber: string, reviewComment: string }, ... ]
-     * }
-     * If no issues for a chunk, reviews is an empty array.
-     * For clarity, label each chunk with its index and the path, plus the PR info.
-     */
     let allDiffsSection = "";
     for (const chunk of diffChunks) {
         allDiffsSection += `
@@ -146,13 +130,18 @@ function createPrompt(prDetails, diffChunks) {
       {
         "chunkIndex": number,
         "reviews": [
-          { "lineNumber": string, "reviewComment": string },
+          {
+            "lineNumber": "+21" or "-15", 
+            "side": "RIGHT" or "LEFT", 
+            "reviewComment": string
+          },
           ...
         ]
       },
       ...
     ]
 
+    - If a line is part of the new code (marked with a '+' in the diff), use a plus sign and "side": "RIGHT". If it's part of the old code (marked with a '-'), use a minus sign and "side": "LEFT".
     - DO NOT suggest adding code comments.
     - Do NOT include any positive comments or compliments.
     - Provide comments and suggestions ONLY if there are issues or improvements needed.
@@ -193,6 +182,7 @@ function getAIResponse(prompt) {
 }
 const ReviewCommentSchema = zod_1.z.object({
     lineNumber: zod_1.z.string(),
+    side: zod_1.z.enum(["LEFT", "RIGHT"]),
     reviewComment: zod_1.z.string(),
 });
 const ReviewDiffSchema = zod_1.z.object({
@@ -202,6 +192,7 @@ const ReviewDiffSchema = zod_1.z.object({
 const ReviewSchema = zod_1.z.object({
     review: zod_1.z.array(ReviewDiffSchema),
 });
+// Single request to gpt-4o-mini to ensure valid JSON structure
 function getFormattedAIResponse(rawContent) {
     var _a;
     return __awaiter(this, void 0, void 0, function* () {
@@ -218,8 +209,7 @@ function getFormattedAIResponse(rawContent) {
                     },
                 ],
             });
-            const parsed = ((_a = response.choices[0].message.parsed) === null || _a === void 0 ? void 0 : _a.review) || [];
-            return parsed;
+            return ((_a = response.choices[0].message.parsed) === null || _a === void 0 ? void 0 : _a.review) || [];
         }
         catch (error) {
             console.error("Error (gpt-4o-mini):", error);
@@ -229,18 +219,18 @@ function getFormattedAIResponse(rawContent) {
 }
 // Convert the final chunk-based JSON to GitHub comment objects
 function mapReviewsToComments(diffChunks, allReviews) {
-    // Build a map chunkIndex -> file path
     const comments = [];
     for (const item of allReviews) {
         const chunkData = diffChunks.find((c) => c.chunkIndex === item.chunkIndex);
         if (!chunkData)
             continue;
-        // For each line comment, create the GH comment
         for (const review of item.reviews) {
+            const numericLine = parseInt(review.lineNumber.replace(/[+-]/g, ""), 10);
             comments.push({
                 body: review.reviewComment,
                 path: chunkData.filePath,
-                line: Number(review.lineNumber),
+                line: numericLine,
+                side: review.side,
             });
         }
     }
@@ -307,24 +297,19 @@ function main() {
             console.log("No chunks to analyze after excluding patterns.");
             return;
         }
-        // Create one big prompt for the entire diff set
         const prompt = createPrompt(prDetails, diffChunkData);
         console.log("Prompt:", prompt);
         // Single request to o1-preview
         const rawAiResponse = yield getAIResponse(prompt);
         console.log("Raw AI response (o1-preview):", rawAiResponse);
-        // Single chained request to gpt-4o-mini to ensure valid JSON structure
         const allReviews = yield getFormattedAIResponse(rawAiResponse);
         console.log("Formatted AI response (gpt-4o-mini):", allReviews);
-        // Map final reviews to GH comment objects
         const comments = mapReviewsToComments(diffChunkData, allReviews);
-        // Post them as a single review if there are any
         if (comments.length > 0) {
             yield createReviewComment(prDetails.owner, prDetails.repo, prDetails.pull_number, comments);
         }
     });
 }
-// Run the action
 main().catch((error) => {
     console.error("Error:", error);
     process.exit(1);
