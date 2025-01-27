@@ -25,6 +25,7 @@ interface PRDetails {
   description: string;
 }
 
+// Fetch PR metadata
 async function getPRDetails(): Promise<PRDetails> {
   const { repository, number } = JSON.parse(
     readFileSync(process.env.GITHUB_EVENT_PATH || "", "utf8")
@@ -43,6 +44,7 @@ async function getPRDetails(): Promise<PRDetails> {
   };
 }
 
+// Fetch the PR diff (or compare commits) as a raw string
 async function getDiff(
   owner: string,
   repo: string,
@@ -58,105 +60,103 @@ async function getDiff(
   return response.data;
 }
 
-async function analyzeCode(
-  parsedDiff: File[],
-  prDetails: PRDetails
-): Promise<Array<{ body: string; path: string; line: number }>> {
-  const comments: Array<{ body: string; path: string; line: number }> = [];
-
-  for (const file of parsedDiff) {
-    if (file.to === "/dev/null") continue; // Ignore deleted files
-    for (const chunk of file.chunks) {
-      const prompt = createPrompt(file, chunk, prDetails);
-      console.log("Prompt:", prompt);
-      const aiResponse = await getAIResponse(prompt);
-      if (aiResponse) {
-        const newComments = createComment(file, chunk, aiResponse);
-        if (newComments) {
-          comments.push(...newComments);
-        }
-      }
-    }
-  }
-  return comments;
+// Gather all diff chunks into an array so we can pass them in a single request
+interface DiffChunkData {
+  chunkIndex: number;
+  filePath: string;
+  diffText: string; // The combined chunk content
 }
 
-const ReviewCommentSchema = z.object({
-  lineNumber: z.string(),
-  reviewComment: z.string(),
-});
+function gatherDiffData(parsedDiff: File[]): DiffChunkData[] {
+  const diffChunkData: DiffChunkData[] = [];
+  let globalIndex = 0;
 
-const ReviewSchema = z.object({
-  reviews: z.array(ReviewCommentSchema),
-});
+  for (const file of parsedDiff) {
+    // ignore deleted files
+    if (file.to === "/dev/null") continue;
 
-function createPrompt(file: File, chunk: Chunk, prDetails: PRDetails): string {
+    /**
+     * Create a diff string for each chunk resembling the following:
+     * @@ -17,5 +17,4 @@ jobs:
+        17    uses: pace-systems/ai-code-reviewer
+        18    with:
+        19        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+     */
+    for (const chunk of file.chunks) {
+      const chunkDiffText = [
+        chunk.content,
+        ...chunk.changes.map(
+          // @ts-expect-error - ln and ln2 exists where needed
+          (c) => `${c.ln ? c.ln : c.ln2} ${c.content}`
+        ),
+      ].join("\n");
+
+      diffChunkData.push({
+        chunkIndex: globalIndex++,
+        filePath: file.to || "",
+        diffText: chunkDiffText,
+      });
+    }
+  }
+  return diffChunkData;
+}
+
+// Build one large prompt with all chunk data
+function createPrompt(
+  prDetails: PRDetails,
+  diffChunks: DiffChunkData[]
+): string {
+  /**
+   * Ask the model to return an array of objects. Each object has:
+   * {
+   *   chunkIndex: <the chunkIndex from diffChunks[]>,
+   *   reviews: [ { lineNumber: string, reviewComment: string }, ... ]
+   * }
+   * If no issues for a chunk, reviews is an empty array.
+   * For clarity, label each chunk with its index and the path, plus the PR info.
+   */
+  let allDiffsSection = "";
+  for (const chunk of diffChunks) {
+    allDiffsSection += `
+      -- Chunk #${chunk.chunkIndex} (File: ${chunk.filePath}) --
+      \`\`\`diff
+      ${chunk.diffText}
+      \`\`\`
+    `;
+  }
+
   return `
-    You are an expert in Python and Django. Your task is to review pull requests by analyzing the provided code diffs. Please follow these instructions carefully:
-    - Respond only in the following JSON format: {"reviews": [{"lineNumber": <line_number>, "reviewComment": "<review comment>"}]}
-    - Do not include any positive comments or compliments.
-    - Provide comments and suggestions ONLY if there are issues or improvements needed. If there are no issues, "reviews" should be an empty array.
-    - Write comments in GitHub Markdown format, focusing solely on code quality, correctness, and best practices.
-    - Use the provided pull request title and description only for context related to the code changes.
-    - DO NOT suggest adding comments to the code.
-    - **Return only valid JSON** without any enclosing backticks or additional formatting.
+    You are an expert in Python and Django. Your task is to review the entire pull request by analyzing the code diffs below. Please follow these instructions carefully:
 
-    Review the following code diff in the file "${
-      file.to
-    }" considering the pull request title and description:
+    - Return your response ONLY in valid JSON, with no backticks or extra text, as an array of objects:
+    [
+      {
+        "chunkIndex": number,
+        "reviews": [
+          { "lineNumber": string, "reviewComment": string },
+          ...
+        ]
+      },
+      ...
+    ]
 
-    Pull request title: ${prDetails.title}
-    Pull request description:
+    - DO NOT suggest adding code comments.
+    - Do NOT include any positive comments or compliments.
+    - Provide comments and suggestions ONLY if there are issues or improvements needed.
+    - If a chunk has no issues, make "reviews" an empty array for that chunk.
+    - Write each "reviewComment" in GitHub Markdown format, focusing on code quality, correctness, and best practices.
 
-    ---
+    Pull Request Title: ${prDetails.title}
+    Pull Request Description:
     ${prDetails.description}
-    ---
 
-    Git diff to review:
+    Now review each chunk below. The chunks are labeled with "chunkIndex" so you can reference them in your JSON output:
 
-    \`\`\`diff
-    ${chunk.content}
-    ${chunk.changes
-      // @ts-expect-error - ln and ln2 exists where needed
-      .map((c) => `${c.ln ? c.ln : c.ln2} ${c.content}`)
-      .join("\n")}
-    \`\`\`
+    ${allDiffsSection}
   `;
 }
 
-async function getFormattedAIResponse(content: string | null): Promise<Array<{
-  lineNumber: string;
-  reviewComment: string;
-}> | null> {
-  if (!content) return null;
-
-  try {
-    const response = await openai.beta.chat.completions.parse({
-      model: "gpt-4o-mini",
-      response_format: zodResponseFormat(ReviewSchema, "reviews"),
-      messages: [
-        {
-          role: "user",
-          content: `Given the following data, format it with the given response format: ${content}`,
-        },
-      ],
-    });
-    console.log(
-      "AI response (gpt-4o-mini):",
-      response.choices[0].message.parsed
-    );
-
-    return response.choices[0].message.parsed?.reviews ?? [];
-  } catch (error) {
-    console.error("Error:", error);
-    return null;
-  }
-}
-
-async function getAIResponse(prompt: string): Promise<Array<{
-  lineNumber: string;
-  reviewComment: string;
-}> | null> {
+async function getAIResponse(prompt: string): Promise<string | null> {
   try {
     const response = await openai.chat.completions.create({
       model: "o1-preview",
@@ -167,42 +167,84 @@ async function getAIResponse(prompt: string): Promise<Array<{
         },
       ],
     });
-    console.log(
-      "AI response (o1-preview):",
-      response.choices[0].message.content
-    );
-
-    const formattedResponse = await getFormattedAIResponse(
-      response.choices[0].message.content
-    );
-
-    return formattedResponse;
+    // Return the plain text from the model
+    const content = response.choices[0].message?.content || "";
+    return content.trim();
   } catch (error) {
-    console.error("Error:", error);
+    console.error("Error (o1-preview):", error);
     return null;
   }
 }
 
-function createComment(
-  file: File,
-  chunk: Chunk,
-  aiResponses: Array<{
-    lineNumber: string;
-    reviewComment: string;
+const ReviewCommentSchema = z.object({
+  lineNumber: z.string(),
+  reviewComment: z.string(),
+});
+
+const FullReviewSchema = z.array(
+  z.object({
+    chunkIndex: z.number(),
+    reviews: z.array(ReviewCommentSchema),
+  })
+);
+
+async function getFormattedAIResponse(rawContent: string | null): Promise<
+  Array<{
+    chunkIndex: number;
+    reviews: Array<{ lineNumber: string; reviewComment: string }>;
   }>
-): Array<{ body: string; path: string; line: number }> {
-  return aiResponses.flatMap((aiResponse) => {
-    if (!file.to) {
-      return [];
-    }
-    return {
-      body: aiResponse.reviewComment,
-      path: file.to,
-      line: Number(aiResponse.lineNumber),
-    };
-  });
+> {
+  if (!rawContent) return [];
+
+  try {
+    const response = await openai.beta.chat.completions.parse({
+      model: "gpt-4o-mini",
+      response_format: zodResponseFormat(FullReviewSchema, "reviews"),
+      messages: [
+        {
+          role: "user",
+          content: `Format the following text as valid JSON that matches the given schema: ${rawContent}`,
+        },
+      ],
+    });
+
+    const parsed = response.choices[0].message.parsed || [];
+    return parsed;
+  } catch (error) {
+    console.error("Error (gpt-4o-mini):", error);
+    return [];
+  }
 }
 
+// Convert the final chunk-based JSON to GitHub comment objects
+function mapReviewsToComments(
+  diffChunks: DiffChunkData[],
+  allReviews: Array<{
+    chunkIndex: number;
+    reviews: Array<{ lineNumber: string; reviewComment: string }>;
+  }>
+): Array<{ body: string; path: string; line: number }> {
+  // Build a map chunkIndex -> file path
+  const comments: Array<{ body: string; path: string; line: number }> = [];
+
+  for (const item of allReviews) {
+    const chunkData = diffChunks.find((c) => c.chunkIndex === item.chunkIndex);
+    if (!chunkData) continue;
+
+    // For each line comment, create the GH comment
+    for (const review of item.reviews) {
+      comments.push({
+        body: review.reviewComment,
+        path: chunkData.filePath,
+        line: Number(review.lineNumber),
+      });
+    }
+  }
+
+  return comments;
+}
+
+// Post the combined review
 async function createReviewComment(
   owner: string,
   repo: string,
@@ -218,6 +260,7 @@ async function createReviewComment(
   });
 }
 
+// Main entry point
 async function main() {
   const prDetails = await getPRDetails();
   let diff: string | null;
@@ -225,6 +268,7 @@ async function main() {
     readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8")
   );
 
+  // Handle PR "opened" or "synchronize"
   if (eventData.action === "opened") {
     diff = await getDiff(
       prDetails.owner,
@@ -256,8 +300,10 @@ async function main() {
     return;
   }
 
+  // Parse the raw diff into structured chunks
   const parsedDiff = parseDiff(diff);
 
+  // Respect "exclude" patterns from the action input
   const excludePatterns = core
     .getInput("exclude")
     .split(",")
@@ -269,7 +315,29 @@ async function main() {
     );
   });
 
-  const comments = await analyzeCode(filteredDiff, prDetails);
+  // Gather all chunk data
+  const diffChunkData = gatherDiffData(filteredDiff);
+  if (diffChunkData.length === 0) {
+    console.log("No chunks to analyze after excluding patterns.");
+    return;
+  }
+
+  // Create one big prompt for the entire diff set
+  const prompt = createPrompt(prDetails, diffChunkData);
+  console.log("Prompt:", prompt);
+
+  // Single request to o1-preview
+  const rawAiResponse = await getAIResponse(prompt);
+  console.log("Raw AI response (o1-preview):", rawAiResponse);
+
+  // Single chained request to gpt-4o-mini to ensure valid JSON structure
+  const allReviews = await getFormattedAIResponse(rawAiResponse);
+  console.log("Formatted AI response (gpt-4o-mini):", allReviews);
+
+  // Map final reviews to GH comment objects
+  const comments = mapReviewsToComments(diffChunkData, allReviews);
+
+  // Post them as a single review if there are any
   if (comments.length > 0) {
     await createReviewComment(
       prDetails.owner,
@@ -280,6 +348,7 @@ async function main() {
   }
 }
 
+// Run the action
 main().catch((error) => {
   console.error("Error:", error);
   process.exit(1);
