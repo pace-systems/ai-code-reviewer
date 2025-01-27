@@ -75,13 +75,6 @@ function gatherDiffData(parsedDiff: File[]): DiffChunkData[] {
     // ignore deleted files
     if (file.to === "/dev/null") continue;
 
-    /**
-     * Create a diff string for each chunk resembling the following:
-     * @@ -17,5 +17,4 @@ jobs:
-        17    uses: pace-systems/ai-code-reviewer
-        18    with:
-        19        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-     */
     for (const chunk of file.chunks) {
       const chunkDiffText = [
         chunk.content,
@@ -106,15 +99,6 @@ function createPrompt(
   prDetails: PRDetails,
   diffChunks: DiffChunkData[]
 ): string {
-  /**
-   * Ask the model to return an array of objects. Each object has:
-   * {
-   *   chunkIndex: <the chunkIndex from diffChunks[]>,
-   *   reviews: [ { lineNumber: string, reviewComment: string }, ... ]
-   * }
-   * If no issues for a chunk, reviews is an empty array.
-   * For clarity, label each chunk with its index and the path, plus the PR info.
-   */
   let allDiffsSection = "";
   for (const chunk of diffChunks) {
     allDiffsSection += `
@@ -133,13 +117,18 @@ function createPrompt(
       {
         "chunkIndex": number,
         "reviews": [
-          { "lineNumber": string, "reviewComment": string },
+          {
+            "lineNumber": "+21" or "-15", 
+            "side": "RIGHT" or "LEFT", 
+            "reviewComment": string
+          },
           ...
         ]
       },
       ...
     ]
 
+    - If a line is part of the new code (marked with a '+' in the diff), use a plus sign and "side": "RIGHT". If it's part of the old code (marked with a '-'), use a minus sign and "side": "LEFT".
     - DO NOT suggest adding code comments.
     - Do NOT include any positive comments or compliments.
     - Provide comments and suggestions ONLY if there are issues or improvements needed.
@@ -178,6 +167,7 @@ async function getAIResponse(prompt: string): Promise<string | null> {
 
 const ReviewCommentSchema = z.object({
   lineNumber: z.string(),
+  side: z.enum(["LEFT", "RIGHT"]),
   reviewComment: z.string(),
 });
 
@@ -190,10 +180,15 @@ const ReviewSchema = z.object({
   review: z.array(ReviewDiffSchema),
 });
 
+// Single request to gpt-4o-mini to ensure valid JSON structure
 async function getFormattedAIResponse(rawContent: string | null): Promise<
   Array<{
     chunkIndex: number;
-    reviews: Array<{ lineNumber: string; reviewComment: string }>;
+    reviews: Array<{
+      lineNumber: string;
+      side: "LEFT" | "RIGHT";
+      reviewComment: string;
+    }>;
   }>
 > {
   if (!rawContent) return [];
@@ -210,8 +205,7 @@ async function getFormattedAIResponse(rawContent: string | null): Promise<
       ],
     });
 
-    const parsed = response.choices[0].message.parsed?.review || [];
-    return parsed;
+    return response.choices[0].message.parsed?.review || [];
   } catch (error) {
     console.error("Error (gpt-4o-mini):", error);
     return [];
@@ -223,11 +217,24 @@ function mapReviewsToComments(
   diffChunks: DiffChunkData[],
   allReviews: Array<{
     chunkIndex: number;
-    reviews: Array<{ lineNumber: string; reviewComment: string }>;
+    reviews: Array<{
+      lineNumber: string;
+      side: "LEFT" | "RIGHT";
+      reviewComment: string;
+    }>;
   }>
-): Array<{ body: string; path: string; line: number }> {
-  // Build a map chunkIndex -> file path
-  const comments: Array<{ body: string; path: string; line: number }> = [];
+): Array<{
+  body: string;
+  path: string;
+  line: number;
+  side: "LEFT" | "RIGHT";
+}> {
+  const comments: Array<{
+    body: string;
+    path: string;
+    line: number;
+    side: "LEFT" | "RIGHT";
+  }> = [];
 
   for (const item of allReviews) {
     const chunkData = diffChunks.find((c) => c.chunkIndex === item.chunkIndex);
@@ -235,10 +242,12 @@ function mapReviewsToComments(
 
     // For each line comment, create the GH comment
     for (const review of item.reviews) {
+      const numericLine = parseInt(review.lineNumber.replace(/[+-]/g, ""), 10);
       comments.push({
         body: review.reviewComment,
         path: chunkData.filePath,
-        line: Number(review.lineNumber),
+        line: numericLine,
+        side: review.side,
       });
     }
   }
@@ -251,7 +260,12 @@ async function createReviewComment(
   owner: string,
   repo: string,
   pull_number: number,
-  comments: Array<{ body: string; path: string; line: number }>
+  comments: Array<{
+    body: string;
+    path: string;
+    line: number;
+    side: "LEFT" | "RIGHT";
+  }>
 ): Promise<void> {
   await octokit.pulls.createReview({
     owner,
