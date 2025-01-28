@@ -142,6 +142,8 @@ function createPrompt(prDetails, diffChunks) {
     ]
 
     - If a line is part of the new code (marked with a '+' in the diff), use a plus sign and "side": "RIGHT". If it's part of the old code (marked with a '-'), use a minus sign and "side": "LEFT".
+    - For any comments on removed code (marked with '-'), map them to the corresponding added code (marked with '+') if the removed code was modified rather than deleted entirely. This ensures comments remain relevant to the changes.
+    - In the final output, all comments should use "side": "RIGHT" - map any "LEFT" side comments to their equivalent added lines where the code was modified, and omit comments on fully deleted code.
     - DO NOT suggest adding code comments.
     - Do NOT include any positive comments or compliments.
     - Provide comments and suggestions ONLY if there are issues or improvements needed.
