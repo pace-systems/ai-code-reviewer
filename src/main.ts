@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import * as core from "@actions/core";
 import OpenAI from "openai";
 import { Octokit } from "@octokit/rest";
-import parseDiff, { File } from "parse-diff";
+import parseDiff, { Chunk, File } from "parse-diff";
 import minimatch from "minimatch";
 
 import { z } from "zod";
@@ -23,11 +23,9 @@ interface PRDetails {
   pull_number: number;
   title: string;
   description: string;
-  baseSha: string;
-  headSha: string;
 }
 
-// Fetch base and head commits from PR data
+// Fetch PR metadata
 async function getPRDetails(): Promise<PRDetails> {
   const { repository, number } = JSON.parse(
     readFileSync(process.env.GITHUB_EVENT_PATH || "", "utf8")
@@ -43,8 +41,6 @@ async function getPRDetails(): Promise<PRDetails> {
     pull_number: number,
     title: prResponse.data.title ?? "",
     description: prResponse.data.body ?? "",
-    baseSha: prResponse.data.base?.sha ?? "",
-    headSha: prResponse.data.head?.sha ?? "",
   };
 }
 
@@ -74,9 +70,11 @@ interface DiffChunkData {
 function gatherDiffData(parsedDiff: File[]): DiffChunkData[] {
   const diffChunkData: DiffChunkData[] = [];
   let globalIndex = 0;
+
   for (const file of parsedDiff) {
     // ignore deleted files
     if (file.to === "/dev/null") continue;
+
     for (const chunk of file.chunks) {
       const chunkDiffText = [
         chunk.content,
@@ -96,6 +94,7 @@ function gatherDiffData(parsedDiff: File[]): DiffChunkData[] {
   return diffChunkData;
 }
 
+// Build one large prompt with all chunk data
 function createPrompt(
   prDetails: PRDetails,
   diffChunks: DiffChunkData[]
@@ -181,6 +180,7 @@ const ReviewSchema = z.object({
   review: z.array(ReviewDiffSchema),
 });
 
+// Single request to gpt-4o-mini to ensure valid JSON structure
 async function getFormattedAIResponse(rawContent: string | null): Promise<
   Array<{
     chunkIndex: number;
@@ -192,6 +192,7 @@ async function getFormattedAIResponse(rawContent: string | null): Promise<
   }>
 > {
   if (!rawContent) return [];
+
   try {
     const response = await openai.beta.chat.completions.parse({
       model: "gpt-4o-mini",
@@ -257,39 +258,34 @@ function mapReviewsToComments(
   return comments;
 }
 
-// Add "commit_id" for old/new lines to allow LEFT side comments
+// Post the combined review
 async function createReviewComment(
   owner: string,
   repo: string,
   pull_number: number,
-  comments: FormattedReview[],
-  baseSha: string,
-  headSha: string
+  comments: Array<{
+    body: string;
+    path: string;
+    line: number;
+    side: "LEFT" | "RIGHT";
+  }>
 ): Promise<void> {
   await octokit.pulls.createReview({
     owner,
     repo,
     pull_number,
+    comments,
     event: "COMMENT",
-    comments: comments.map((c) => ({
-      body: c.body,
-      path: c.path,
-      line: c.line,
-      side: c.side,
-      commit_id: c.side === "LEFT" ? baseSha : headSha,
-    })),
   });
 }
 
+// Main entry point
 async function main() {
   const prDetails = await getPRDetails();
   let diff: string | null;
   const eventData = JSON.parse(
     readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8")
   );
-
-  let baseSha = prDetails.baseSha;
-  let headSha = prDetails.headSha;
 
   if (eventData.action === "opened") {
     diff = await getDiff(
@@ -298,17 +294,19 @@ async function main() {
       prDetails.pull_number
     );
   } else if (eventData.action === "synchronize") {
-    baseSha = eventData.before || baseSha;
-    headSha = eventData.after || headSha;
+    const newBaseSha = eventData.before;
+    const newHeadSha = eventData.after;
+
     const response = await octokit.repos.compareCommits({
       headers: {
         accept: "application/vnd.github.v3.diff",
       },
       owner: prDetails.owner,
       repo: prDetails.repo,
-      base: baseSha,
-      head: headSha,
+      base: newBaseSha,
+      head: newHeadSha,
     });
+
     diff = String(response.data);
   } else {
     console.log("Unsupported event:", process.env.GITHUB_EVENT_NAME);
@@ -355,9 +353,7 @@ async function main() {
       prDetails.owner,
       prDetails.repo,
       prDetails.pull_number,
-      comments,
-      baseSha,
-      headSha
+      comments
     );
   }
 }
