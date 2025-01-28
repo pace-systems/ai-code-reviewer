@@ -204,7 +204,6 @@ async function getFormattedAIResponse(rawContent: string | null): Promise<
         },
       ],
     });
-
     return response.choices[0].message.parsed?.review || [];
   } catch (error) {
     console.error("Error (gpt-4o-mini):", error);
@@ -212,36 +211,40 @@ async function getFormattedAIResponse(rawContent: string | null): Promise<
   }
 }
 
-// Convert the final chunk-based JSON to GitHub comment objects
-function mapReviewsToComments(
-  diffChunks: DiffChunkData[],
-  allReviews: Array<{
-    chunkIndex: number;
-    reviews: Array<{
-      lineNumber: string;
-      side: "LEFT" | "RIGHT";
-      reviewComment: string;
-    }>;
-  }>
-): Array<{
+interface FormattedReview {
   body: string;
   path: string;
   line: number;
   side: "LEFT" | "RIGHT";
-}> {
-  const comments: Array<{
-    body: string;
-    path: string;
-    line: number;
-    side: "LEFT" | "RIGHT";
-  }> = [];
+}
+
+interface RawReview {
+  lineNumber: string;
+  side: "LEFT" | "RIGHT";
+  reviewComment: string;
+}
+
+interface Review {
+  chunkIndex: number;
+  reviews: RawReview[];
+}
+
+// Convert the final chunk-based JSON to GitHub comment objects
+function mapReviewsToComments(
+  diffChunks: DiffChunkData[],
+  allReviews: Review[]
+): FormattedReview[] {
+  const comments: FormattedReview[] = [];
 
   for (const item of allReviews) {
     const chunkData = diffChunks.find((c) => c.chunkIndex === item.chunkIndex);
     if (!chunkData) continue;
 
-    // For each line comment, create the GH comment
     for (const review of item.reviews) {
+      // Skip left-side lines to avoid "Unprocessable Entity"
+      if (review.side === "LEFT") {
+        continue;
+      }
       const numericLine = parseInt(review.lineNumber.replace(/[+-]/g, ""), 10);
       comments.push({
         body: review.reviewComment,
@@ -284,7 +287,6 @@ async function main() {
     readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8")
   );
 
-  // Handle PR "opened" or "synchronize"
   if (eventData.action === "opened") {
     diff = await getDiff(
       prDetails.owner,
@@ -316,10 +318,8 @@ async function main() {
     return;
   }
 
-  // Parse the raw diff into structured chunks
   const parsedDiff = parseDiff(diff);
 
-  // Respect "exclude" patterns from the action input
   const excludePatterns = core
     .getInput("exclude")
     .split(",")
@@ -331,29 +331,23 @@ async function main() {
     );
   });
 
-  // Gather all chunk data
   const diffChunkData = gatherDiffData(filteredDiff);
   if (diffChunkData.length === 0) {
     console.log("No chunks to analyze after excluding patterns.");
     return;
   }
 
-  // Create one big prompt for the entire diff set
   const prompt = createPrompt(prDetails, diffChunkData);
   console.log("Prompt:", prompt);
 
-  // Single request to o1-preview
   const rawAiResponse = await getAIResponse(prompt);
   console.log("Raw AI response (o1-preview):", rawAiResponse);
 
-  // Single chained request to gpt-4o-mini to ensure valid JSON structure
   const allReviews = await getFormattedAIResponse(rawAiResponse);
   console.log("Formatted AI response (gpt-4o-mini):", allReviews);
 
-  // Map final reviews to GH comment objects
   const comments = mapReviewsToComments(diffChunkData, allReviews);
 
-  // Post them as a single review if there are any
   if (comments.length > 0) {
     await createReviewComment(
       prDetails.owner,
@@ -364,7 +358,6 @@ async function main() {
   }
 }
 
-// Run the action
 main().catch((error) => {
   console.error("Error:", error);
   process.exit(1);

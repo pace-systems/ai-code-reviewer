@@ -225,6 +225,10 @@ function mapReviewsToComments(diffChunks, allReviews) {
         if (!chunkData)
             continue;
         for (const review of item.reviews) {
+            // Skip left-side lines to avoid "Unprocessable Entity"
+            if (review.side === "LEFT") {
+                continue;
+            }
             const numericLine = parseInt(review.lineNumber.replace(/[+-]/g, ""), 10);
             comments.push({
                 body: review.reviewComment,
@@ -255,7 +259,6 @@ function main() {
         const prDetails = yield getPRDetails();
         let diff;
         const eventData = JSON.parse((0, fs_1.readFileSync)((_a = process.env.GITHUB_EVENT_PATH) !== null && _a !== void 0 ? _a : "", "utf8"));
-        // Handle PR "opened" or "synchronize"
         if (eventData.action === "opened") {
             diff = yield getDiff(prDetails.owner, prDetails.repo, prDetails.pull_number);
         }
@@ -281,9 +284,7 @@ function main() {
             console.log("No diff found");
             return;
         }
-        // Parse the raw diff into structured chunks
         const parsedDiff = (0, parse_diff_1.default)(diff);
-        // Respect "exclude" patterns from the action input
         const excludePatterns = core
             .getInput("exclude")
             .split(",")
@@ -291,7 +292,6 @@ function main() {
         const filteredDiff = parsedDiff.filter((file) => {
             return !excludePatterns.some((pattern) => { var _a; return (0, minimatch_1.default)((_a = file.to) !== null && _a !== void 0 ? _a : "", pattern); });
         });
-        // Gather all chunk data
         const diffChunkData = gatherDiffData(filteredDiff);
         if (diffChunkData.length === 0) {
             console.log("No chunks to analyze after excluding patterns.");
@@ -299,7 +299,6 @@ function main() {
         }
         const prompt = createPrompt(prDetails, diffChunkData);
         console.log("Prompt:", prompt);
-        // Single request to o1-preview
         const rawAiResponse = yield getAIResponse(prompt);
         console.log("Raw AI response (o1-preview):", rawAiResponse);
         const allReviews = yield getFormattedAIResponse(rawAiResponse);
