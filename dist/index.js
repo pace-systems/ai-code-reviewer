@@ -56,9 +56,9 @@ const octokit = new rest_1.Octokit({ auth: GITHUB_TOKEN });
 const openai = new openai_1.default({
     apiKey: OPENAI_API_KEY,
 });
-// Fetch PR metadata
+// Fetch base and head commits from PR data
 function getPRDetails() {
-    var _a, _b;
+    var _a, _b, _c, _d, _e, _f;
     return __awaiter(this, void 0, void 0, function* () {
         const { repository, number } = JSON.parse((0, fs_1.readFileSync)(process.env.GITHUB_EVENT_PATH || "", "utf8"));
         const prResponse = yield octokit.pulls.get({
@@ -72,6 +72,8 @@ function getPRDetails() {
             pull_number: number,
             title: (_a = prResponse.data.title) !== null && _a !== void 0 ? _a : "",
             description: (_b = prResponse.data.body) !== null && _b !== void 0 ? _b : "",
+            baseSha: (_d = (_c = prResponse.data.base) === null || _c === void 0 ? void 0 : _c.sha) !== null && _d !== void 0 ? _d : "",
+            headSha: (_f = (_e = prResponse.data.head) === null || _e === void 0 ? void 0 : _e.sha) !== null && _f !== void 0 ? _f : "",
         };
     });
 }
@@ -111,7 +113,6 @@ function gatherDiffData(parsedDiff) {
     }
     return diffChunkData;
 }
-// Build one large prompt with all chunk data
 function createPrompt(prDetails, diffChunks) {
     let allDiffsSection = "";
     for (const chunk of diffChunks) {
@@ -192,7 +193,6 @@ const ReviewDiffSchema = zod_1.z.object({
 const ReviewSchema = zod_1.z.object({
     review: zod_1.z.array(ReviewDiffSchema),
 });
-// Single request to gpt-4o-mini to ensure valid JSON structure
 function getFormattedAIResponse(rawContent) {
     var _a;
     return __awaiter(this, void 0, void 0, function* () {
@@ -240,39 +240,46 @@ function mapReviewsToComments(diffChunks, allReviews) {
     }
     return comments;
 }
-// Post the combined review
-function createReviewComment(owner, repo, pull_number, comments) {
+// Add "commit_id" for old/new lines to allow LEFT side comments
+function createReviewComment(owner, repo, pull_number, comments, baseSha, headSha) {
     return __awaiter(this, void 0, void 0, function* () {
         yield octokit.pulls.createReview({
             owner,
             repo,
             pull_number,
-            comments,
             event: "COMMENT",
+            comments: comments.map((c) => ({
+                body: c.body,
+                path: c.path,
+                line: c.line,
+                side: c.side,
+                commit_id: c.side === "LEFT" ? baseSha : headSha,
+            })),
         });
     });
 }
-// Main entry point
 function main() {
     var _a;
     return __awaiter(this, void 0, void 0, function* () {
         const prDetails = yield getPRDetails();
         let diff;
         const eventData = JSON.parse((0, fs_1.readFileSync)((_a = process.env.GITHUB_EVENT_PATH) !== null && _a !== void 0 ? _a : "", "utf8"));
+        let baseSha = prDetails.baseSha;
+        let headSha = prDetails.headSha;
         if (eventData.action === "opened") {
             diff = yield getDiff(prDetails.owner, prDetails.repo, prDetails.pull_number);
         }
         else if (eventData.action === "synchronize") {
-            const newBaseSha = eventData.before;
-            const newHeadSha = eventData.after;
+            baseSha = eventData.before || baseSha;
+            headSha = eventData.after || headSha;
             const response = yield octokit.repos.compareCommits({
                 headers: {
                     accept: "application/vnd.github.v3.diff",
                 },
                 owner: prDetails.owner,
                 repo: prDetails.repo,
-                base: newBaseSha,
-                head: newHeadSha,
+                base: baseSha,
+                head: headSha,
             });
             diff = String(response.data);
         }
@@ -305,7 +312,7 @@ function main() {
         console.log("Formatted AI response (gpt-4o-mini):", allReviews);
         const comments = mapReviewsToComments(diffChunkData, allReviews);
         if (comments.length > 0) {
-            yield createReviewComment(prDetails.owner, prDetails.repo, prDetails.pull_number, comments);
+            yield createReviewComment(prDetails.owner, prDetails.repo, prDetails.pull_number, comments, baseSha, headSha);
         }
     });
 }
