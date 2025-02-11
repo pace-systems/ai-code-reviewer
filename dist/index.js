@@ -123,38 +123,57 @@ function createPrompt(prDetails, diffChunks) {
     `;
     }
     return `
-    You are an expert in Python and Django. Your task is to review the entire pull request by analyzing the code diffs below. Please follow these instructions carefully:
+    You are an expert code reviewer for Python and Django. Analyze the pull request diffs and context below following these guidelines:
 
-    - Return your response ONLY in valid JSON, with no backticks or extra text, as an array of objects:
+    RESPONSE FORMAT:
+    Return ONLY valid JSON, with no backticks or extra text, as an array of objects:
     [
       {
         "chunkIndex": number,
         "reviews": [
           {
-            "lineNumber": "+21" or "-15", 
-            "side": "RIGHT" or "LEFT", 
-            "reviewComment": string
-          },
-          ...
+            "lineNumber": string (format: "+123" for additions),
+            "side": "RIGHT",
+            "reviewComment": string (GitHub Markdown format)
+          }
         ]
-      },
-      ...
+      }
     ]
 
-    - If a line is part of the new code (marked with a '+' in the diff), use a plus sign and "side": "RIGHT". If it's part of the old code (marked with a '-'), use a minus sign and "side": "LEFT".
-    - For any comments on removed code (marked with '-'), map them to the corresponding added code (marked with '+') if the removed code was modified rather than deleted entirely. This ensures comments remain relevant to the changes.
-    - In the final output, all comments should use "side": "RIGHT" - map any "LEFT" side comments to their equivalent added lines where the code was modified, and omit comments on fully deleted code.
-    - DO NOT suggest adding code comments.
-    - Do NOT include any positive comments or compliments.
-    - Provide comments and suggestions ONLY if there are issues or improvements needed.
-    - If a chunk has no issues, make "reviews" an empty array for that chunk.
-    - Write each "reviewComment" in GitHub Markdown format, focusing on code quality, correctness, and best practices.
+    REVIEW PRIORITIES (in order):
+    1. Security vulnerabilities
+    2. Critical bugs or logic errors
+    3. Performance issues (O(n²) algorithms, memory leaks, etc.)
+    4. API contract violations
+    5. Breaking changes without proper deprecation
+    6. Type safety issues
+    7. Error handling gaps
+    8. Race conditions in async code
+    9. Resource management issues
+
+    REVIEW RULES:
+    - Focus on substantive issues that impact code quality, correctness, or performance
+    - Always place comments on the new code ("RIGHT" side) where the issue should be fixed
+    - Provide specific, actionable feedback with clear examples when suggesting changes
+    - Include code snippets in suggestions using markdown code blocks
+    - For each issue, explain:
+      1. What the problem is
+      2. Why it's a problem
+      3. How to fix it
+
+    DO NOT:
+    - Comment on style or formatting
+    - Suggest adding documentation or comments
+    - Make positive remarks or compliments
+    - Review generated, vendored, or test files
+    - Suggest minor refactoring without clear benefits
+    - Comment on removed code unless it impacts remaining code
 
     Pull Request Title: ${prDetails.title}
     Pull Request Description:
     ${prDetails.description}
 
-    Now review each chunk below. The chunks are labeled with "chunkIndex" so you can reference them in your JSON output:
+    Review the following chunks:
 
     ${allDiffsSection}
   `;
